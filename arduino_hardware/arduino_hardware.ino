@@ -53,8 +53,8 @@ const int ANGLE_OPEN = 90;    // Góc mở cổng
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // Biến quản lý trạng thái hiển thị
-String currentMessag_in = "";
-String currentMessage_out = ""
+String currentMessage_in = "";
+String currentMessage_out = "";
 unsigned long messageDisplayTime = 0;
 
 // ================= HÀM CẬP NHẬT MÀN HÌNH OLED =================
@@ -73,8 +73,8 @@ void updateOLED(int ir_in, int ir_out) {
   else {
     currentMessage_in = currentMessage_out = "";
     
-    bool s1_occupied = (digitalRead(IR_SLOT_1) == LOW);
-    bool s2_occupied = (digitalRead(IR_SLOT_2) == LOW);
+    bool s1_occupied = (digitalRead(IR_SLOT_1) == 0);
+    bool s2_occupied = (digitalRead(IR_SLOT_2) == 0);
     int slots_available = 0;
     if (!s1_occupied) slots_available++;
     if (!s2_occupied) slots_available++;
@@ -129,14 +129,14 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
   if(String(topic) == topic_control){
     String target = doc["target"];
-    if(target == "SERVO_IN" && digitalRead(IR_GATE_IN) == "LOW"){
+    if(target == "SERVO_IN" && digitalRead(IR_GATE_IN) == 0){
       servoIn.write(ANGLE_OPEN);
       state_ir_in = true;
-    } else if(target == "SERVO_OUT" && digitalRead(IR_GATE_OUT) == "LOW"){
+    } else if(target == "SERVO_OUT" && digitalRead(IR_GATE_OUT) == 0){
       servoOut.write(ANGLE_OPEN);
       state_ir_out = true;
     }
-    else{
+    else if(target == "PAYMENT"){
       state_payment = true;
       session_id = doc["session"].as<String>();
       invoice_id = doc["invoice"].as<String>();
@@ -195,7 +195,7 @@ void setup() {
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 
-  updateOLED(); // Hiển thị giao diện chính
+  updateOLED(1, 1);
 }
 
 // ================= LOOP (VÒNG LẶP CHÍNH) =================
@@ -209,30 +209,28 @@ void loop() {
   int ir_slot1 = digitalRead(IR_SLOT_1);
   int ir_slot2 = digitalRead(IR_SLOT_2);
   
-  bool displayNeedsUpdate = false; // Cờ báo hiệu cần vẽ lại màn hình
-
-  unsigned long timeStart, timeRecent;
+  bool displayNeedsUpdate = false;
 
   // 1. XỬ LÝ CỔNG VÀO (GATE IN)
   if (ir_in != last_ir_in) {
     delay(50);
     if (ir_in == 0) {
       client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"CO_XE\"}");
-      currentMessage_in = "XE DANG VAO";
+      currentMessage_in = "CO XE VAO";
       messageDisplayTime = millis();
       displayNeedsUpdate = true;
-      last_ir_in = ir_in;
     }
     else if(state_ir_in){
-      timeStart = timeRecent = millis();
-      while(timeRecent - timeStart >= 10000 || ir_in == 0){
-        timeRecent = millis();
+      for (int i = 0; i < 100; i++) { 
+          client.loop(); // Duy trì sóng MQTT
+          delay(100);    // Mỗi vòng đợi 0.1 giây -> 100 vòng là đủ 10 giây
       }
       servoIn.write(ANGLE_CLOSED);
       client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"TRONG\"}");
       displayNeedsUpdate = true;
       state_ir_in = false;
     }
+    last_ir_in = ir_in;
   }
 
   // 2. XỬ LÝ CỔNG RA (GATE OUT)
@@ -253,22 +251,22 @@ void loop() {
       }
       else{
         client.publish(topic_sensor, "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}");
-        currentMessage_out = "XE DANG RA"; 
+        currentMessage_out = "CO XE RA"; 
         messageDisplayTime = millis();
         displayNeedsUpdate = true;
-        last_ir_out = ir_out;
       }
     } 
     else if(state_ir_out){
-      timeStart = timeRecent = millis();
-      while(timeRecent - timeStart >= 10000 || ir_in == 0){
-        timeRecent = millis();
+      for (int i = 0; i < 100; i++) { 
+          client.loop(); // Duy trì sóng MQTT
+          delay(100);    // Mỗi vòng đợi 0.1 giây -> 100 vòng là đủ 10 giây
       }
       servoOut.write(ANGLE_CLOSED);
       client.publish(topic_sensor, "{\"sensor\": \"GATE_OUT\", \"status\": \"TRONG\"}");
       displayNeedsUpdate = true;
       state_ir_out = false;
     }
+    last_ir_out = ir_out;
   }
 
   // 3. XỬ LÝ SLOT ĐỖ XE
@@ -302,6 +300,6 @@ void loop() {
   }
 
   if (displayNeedsUpdate) {
-    updateOLED();
+    updateOLED(ir_in, ir_out);
   }
 }
