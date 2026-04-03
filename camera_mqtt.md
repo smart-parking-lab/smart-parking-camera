@@ -152,7 +152,7 @@ client.connect("broker.hivemq.com", 1883, 60)
 
 # 2. Bắn tin nhắn (Gửi lệnh mở cổng)
 topic_gui = "ptithcm_2022/smart_parking/control"
-noidung_gui = '{"command": "OPEN_IN"}'
+noidung_gui = '{"target": "SERVO_IN", "command": "OPEN"}'
 
 client.publish(topic_gui, noidung_gui)
 print("Đã gửi tin nhắn thành công!")
