@@ -13,8 +13,8 @@ const char* mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 
 // Các topic MQTT
-const char* topic_sensor = "ptithcm_2022/smart_parking/sensors"; // Gửi lên BE
-const char* topic_control = "ptithcm_2022/smart_parking/control"; // Nhận từ BE
+const char* topic_sensor = "ptithcm_2025/smart_parking/sensors"; // Gửi lên BE
+const char* topic_control = "ptithcm_2025/smart_parking/control"; // Nhận từ BE
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -53,25 +53,23 @@ const int ANGLE_OPEN = 90;    // Góc mở cổng
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 // Biến quản lý trạng thái hiển thị
-String currentMessage_in = "";
-String currentMessage_out = "";
+String currentMessage = "";
 unsigned long messageDisplayTime = 0;
 
 // ================= HÀM CẬP NHẬT MÀN HÌNH OLED =================
-void updateOLED(int ir_in, int ir_out) {
+void updateOLED() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
   // Nếu đang có thông báo tạm thời (Xe vào/ra) và chưa qua 3 giây
-  if ((currentMessage_in != "" && ir_in == 0) || (currentMessage_out != "" && ir_out == 0)){
+  if (currentMessage != ""){
     display.setTextSize(2);
     display.setCursor(0, 25);
-    display.println(currentMessage_in);
-    display.println(currentMessage_out);
+    display.println(currentMessage);
   }
   else {
-    currentMessage_in = currentMessage_out = "";
+    currentMessage = "";
     
     bool s1_occupied = (digitalRead(IR_SLOT_1) == 0);
     bool s2_occupied = (digitalRead(IR_SLOT_2) == 0);
@@ -195,7 +193,7 @@ void setup() {
   client.setServer(mqtt_server, mqtt_port);
   client.setCallback(callback);
 
-  updateOLED(1, 1);
+  updateOLED();
 }
 
 // ================= LOOP (VÒNG LẶP CHÍNH) =================
@@ -208,98 +206,104 @@ void loop() {
   int ir_out = digitalRead(IR_GATE_OUT);
   int ir_slot1 = digitalRead(IR_SLOT_1);
   int ir_slot2 = digitalRead(IR_SLOT_2);
-  
-  bool displayNeedsUpdate = false;
+  int dem = 0;
+
+  updateOLED();
 
   // 1. XỬ LÝ CỔNG VÀO (GATE IN)
   if (ir_in != last_ir_in) {
     delay(50);
     if (ir_in == 0) {
       client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"CO_XE\"}");
-      currentMessage_in = "CO XE VAO";
+      currentMessage = "CO XE VAO";
       messageDisplayTime = millis();
-      displayNeedsUpdate = true;
+      updateOLED();
     }
-    else if(state_ir_in){
-      for (int i = 0; i < 100; i++) { 
-          client.loop(); // Duy trì sóng MQTT
-          delay(100);    // Mỗi vòng đợi 0.1 giây -> 100 vòng là đủ 10 giây
-      }
-      servoIn.write(ANGLE_CLOSED);
+    else{
       client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"TRONG\"}");
-      displayNeedsUpdate = true;
-      state_ir_in = false;
+      currentMessage = "";
+      messageDisplayTime = millis();
+      updateOLED();
     }
     last_ir_in = ir_in;
+  } else if (state_ir_in){
+    while(dem<=10 || ir_in == 0){
+      client.loop(); // Duy trì sóng MQTT
+      delay(100);
+      dem += 1;    
+    }
+    servoIn.write(ANGLE_CLOSED);
+    state_ir_in = false;
+    dem = 0;
   }
 
   // 2. XỬ LÝ CỔNG RA (GATE OUT)
   if (ir_out != last_ir_out) {
     delay(50);
     if (ir_out == 0) {
-      if(state_payment){
-        StaticJsonDocument<256> docReply;
-        docReply["target"] = "PAYMENT";
-        docReply["status"] = "SUCCESS";
-        docReply["session"] = session_id;
-        docReply["invoice"] = invoice_id;
-        docReply["cost"] = cost;
-        String jsonString;
-        serializeJson(docReply, jsonString);
-        client.publish(topic_sensor, jsonString.c_str());
-        state_payment = false;
-      }
-      else{
-        client.publish(topic_sensor, "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}");
-        currentMessage_out = "CO XE RA"; 
-        messageDisplayTime = millis();
-        displayNeedsUpdate = true;
-      }
-    } 
-    else if(state_ir_out){
-      for (int i = 0; i < 100; i++) { 
-          client.loop(); // Duy trì sóng MQTT
-          delay(100);    // Mỗi vòng đợi 0.1 giây -> 100 vòng là đủ 10 giây
-      }
-      servoOut.write(ANGLE_CLOSED);
-      client.publish(topic_sensor, "{\"sensor\": \"GATE_OUT\", \"status\": \"TRONG\"}");
-      displayNeedsUpdate = true;
-      state_ir_out = false;
+      client.publish(topic_sensor, "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}");
+      currentMessage = "CO XE RA"; 
+      messageDisplayTime = millis();
+      updateOLED();     
+    }
+    else{
+      client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"TRONG\"}");
+      currentMessage = "";
+      messageDisplayTime = millis();
+      updateOLED();
     }
     last_ir_out = ir_out;
+  } 
+  else if(state_payment){
+    StaticJsonDocument<256> docReply;
+    docReply["target"] = "PAYMENT";
+    docReply["status"] = "SUCCESS";
+    docReply["session"] = session_id;
+    docReply["invoice"] = invoice_id;
+    docReply["cost"] = cost;
+    String jsonString;
+    serializeJson(docReply, jsonString);
+    client.publish(topic_sensor, jsonString.c_str());
+    state_payment = false;
+    currentMessage = "THANH TOAN THANH CONG";
+    updateOLED();
+  }
+  else if(state_ir_out){
+    while(dem<=10 || ir_in == 0){
+      client.loop(); // Duy trì sóng MQTT
+      delay(100);
+      dem += 1;    
+    }
+    servoOut.write(ANGLE_CLOSED);
+    state_ir_out = false;
+    dem = 0;
   }
 
-  // 3. XỬ LÝ SLOT ĐỖ XE
+  //3. XỬ LÝ SLOT ĐỖ XE
   if (ir_slot1 != last_ir_slot1) {
     delay(50);
-    currentMessage_in = currentMessage_out = "";
+    currentMessage = "";
     if (ir_slot1 == 0){
       client.publish(topic_sensor, "{\"sensor\": \"SLOT_1\", \"status\": \"CO_XE\"}");
       messageDisplayTime = millis();
-      displayNeedsUpdate = true;
     }
     else{
       client.publish(topic_sensor, "{\"sensor\": \"SLOT_1\", \"status\": \"TRONG\"}");
-      displayNeedsUpdate = true;
     }
     last_ir_slot1 = ir_slot1;
+    updateOLED();
   }
 
   if (ir_slot2 != last_ir_slot2) {
-    currentMessage_in = currentMessage_out = "";
+    currentMessage = "";
     if (ir_slot2 == 0){
       client.publish(topic_sensor, "{\"sensor\": \"SLOT_2\", \"status\": \"CO_XE\"}");
       messageDisplayTime = millis();
-      displayNeedsUpdate = true;
     }
     else{
       client.publish(topic_sensor, "{\"sensor\": \"SLOT_2\", \"status\": \"TRONG\"}");
-      displayNeedsUpdate = true;
     }
     last_ir_slot2 = ir_slot2;
-  }
-
-  if (displayNeedsUpdate) {
-    updateOLED(ir_in, ir_out);
+    updateOLED();
   }
 }
