@@ -254,20 +254,16 @@ void loop() {
 
   // 1. XỬ LÝ CỔNG VÀO (GATE IN)
   if (state_ir_in) {
-    if(ir_in != 0){
-      if(millis() - gateInOpenTime) > 5000)){
-        servoIn.write(ANGLE_CLOSED);
-        state_ir_in = false;
-      }
+    if((millis() - gateInOpenTime) > 5000) && ir_in != 0){
+      servoIn.write(ANGLE_CLOSED);
+      state_ir_in = false;
     }
   }
 
   if (state_ir_out) {
-    if(ir_out != 0){
-      if(millis() - gateOutOpenTime) > 5000)){
-        servoOut.write(ANGLE_CLOSED);
-        state_ir_out = false;
-      }
+    if((millis() - gateOutOpenTime) > 5000) && ir_out != 0){
+      servoOut.write(ANGLE_CLOSED);
+      state_ir_out = false;
     }
   }
 
