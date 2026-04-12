@@ -24,7 +24,6 @@ Cấu trúc JSON cụ thể dành cho Servo:
 ```
 ```bash
 Cấu trúc JSON cụ thể dành cho Payment:
-- {"target": "PAYMENT", "status": "START", "sesion": , "invoice": , "cost": "3000"}   //BE ra lệnh cho phần cứng bắt người dùng thanh toán
-- {"target": "PAYMENT", "status": "SUCCESS", "sesion": , "invoice": , "cost": "3000"} //Phần cứng trả về kết quả thanh toán
-- {"target": "PAYMENT", "status": "FAIL", "sesion": , "invoice": , "cost": "3000"}    //Phần cứng trả về kết quả thanh toán
+- {"target": "PAYMENT", "status": "START", "method": "", "invoice": "", "cost": "3000"}   //BE ra lệnh cho phần cứng bắt người dùng thanh toán
+- {"target": "PAYMENT", "status": "SUCCESS", "method": , "invoice": "", "cost": "3000"} //Phần cứng trả về kết quả thanh toán
 ```

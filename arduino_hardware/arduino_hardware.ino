@@ -19,6 +19,9 @@ const char* topic_control = "ptithcm_2025/smart_parking/control"; // Nhận từ
 WiFiClient espClient;
 PubSubClient client(espClient);
 
+QueueHandle_t mqttSendQueue;
+QueueHandle_t mqttReceiveQueue;
+
 // ================= CẤU HÌNH PHẦN CỨNG =================
 // 1. Cảm biến hồng ngoại
 #define IR_GATE_IN  32
@@ -35,7 +38,10 @@ bool state_payment = false;
 bool state_ir_in = false;
 bool state_ir_out = false;
 
-String session_id = "";
+unsigned long gateInOpenTime = 0;
+unsigned long gateOutOpenTime = 0;
+
+String method = "";
 String invoice_id = "";
 String cost = "";
 
@@ -63,10 +69,8 @@ void updateOLED() {
   display.setTextColor(SSD1306_WHITE);
 
   // Nếu đang có thông báo tạm thời (Xe vào/ra) và chưa qua 3 giây
-  if (currentMessage != ""){
-    display.setTextSize(2);
-    display.setCursor(0, 25);
-    display.println(currentMessage);
+  if (currentMessage != "" && (millis() - messageDisplayTime > 3000)) {
+    currentMessage = "";
   }
   else {
     currentMessage = "";
@@ -136,11 +140,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
     }
     else if(target == "PAYMENT"){
       state_payment = true;
-      session_id = doc["session"].as<String>();
+      method = doc["method"].as<String>();
       invoice_id = doc["invoice"].as<String>();
       cost = doc["cost"].as<String>();
     }
   }
+  xQueueSend(mqttReceiveQueue, &message, 0);
 }
 
 // ================= HÀM KẾT NỐI MẠNG & MQTT =================
@@ -158,6 +163,23 @@ void reconnect() {
     } else {
       delay(5000);
     }
+  }
+}
+
+void TaskMQTT_Code(void * pvParameters){
+  setup_wifi();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+
+  for(;;){
+    if(!client.connected()) reconnect();
+    client.loop();
+    String sendMsg;
+    if(xQueueReceive(mqttSendQueue, &sendMsg, 0) == pdTRUE){
+      client.publish(topic_sensor, sendMsg.c_str());
+      Serial.println("[MQTT publish] " + sendMsg);
+    }
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 
@@ -189,121 +211,116 @@ void setup() {
   display.println("Khoi dong he thong...");
   display.display();
 
-  setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
+  mqttSendQueue = xQueueCreate(10, sizeof(String));
+  mqttReceiveQueue = xQueueCreate(10, sizeof(String));
 
-  updateOLED();
+  xTaskCreatePinnedToCore(TaskMQTT_Code, "TaskMQTT", 10000, NULL, 1, NULL, 0);
 }
 
 // ================= LOOP (VÒNG LẶP CHÍNH) =================
 void loop() {
-  if (!client.connected()) reconnect();
-  client.loop();
-
   // Đọc trạng thái hiện tại của 4 cảm biến
   int ir_in = digitalRead(IR_GATE_IN);
   int ir_out = digitalRead(IR_GATE_OUT);
   int ir_slot1 = digitalRead(IR_SLOT_1);
   int ir_slot2 = digitalRead(IR_SLOT_2);
-  int dem = 0;
 
-  updateOLED();
+  String recvMsg;
+  if(xQueueReceive(mqttReceiveQueue, &recvMsg, 0) == pdTRUE){
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, recvMsg);
 
-  // 1. XỬ LÝ CỔNG VÀO (GATE IN)
-  if (ir_in != last_ir_in) {
-    delay(50);
-    if (ir_in == 0) {
-      client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"CO_XE\"}");
-      currentMessage = "CO XE VAO";
-      messageDisplayTime = millis();
-      updateOLED();
+    if(!error){
+      String target = doc["target"];
+      if(target == "SERVO_IN" && ir_in == 0){
+        servoIn.write(ANGLE_OPEN);
+        state_ir_in = true;
+        gateInOpenTime = millis();
+        gateInWaiteAfter = millis();
+      } 
+      else if(target == "SERVO_OUT" && ir_out == 0){
+        servoOut.write(ANGLE_OPEN);
+        state_ir_out = true;
+        gateOutOpenTime = millis();
+      }
+      else if(target == "PAYMENT"){
+        state_payment = true;
+        method = doc["method"].as<String>();
+        invoice_id = doc["invoice"].as<String>();
+        cost = doc["cost"].as<String>();
+      }
     }
-    else{
-      client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"TRONG\"}");
-      currentMessage = "";
-      messageDisplayTime = millis();
-      updateOLED();
-    }
-    last_ir_in = ir_in;
-  } else if (state_ir_in){
-    while(dem<=10 || ir_in == 0){
-      client.loop(); // Duy trì sóng MQTT
-      delay(100);
-      dem += 1;    
-    }
-    servoIn.write(ANGLE_CLOSED);
-    state_ir_in = false;
-    dem = 0;
   }
 
-  // 2. XỬ LÝ CỔNG RA (GATE OUT)
-  if (ir_out != last_ir_out) {
-    delay(50);
-    if (ir_out == 0) {
-      client.publish(topic_sensor, "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}");
-      currentMessage = "CO XE RA"; 
-      messageDisplayTime = millis();
-      updateOLED();     
+  // 1. XỬ LÝ CỔNG VÀO (GATE IN)
+  if (state_ir_in) {
+    if(ir_in != 0){
+      if(millis() - gateInOpenTime) > 5000)){
+        servoIn.write(ANGLE_CLOSED);
+        state_ir_in = false;
+      }
     }
-    else{
-      client.publish(topic_sensor, "{\"sensor\": \"GATE_IN\", \"status\": \"TRONG\"}");
-      currentMessage = "";
-      messageDisplayTime = millis();
-      updateOLED();
+  }
+
+  if (state_ir_out) {
+    if(ir_out != 0){
+      if(millis() - gateOutOpenTime) > 5000)){
+        servoOut.write(ANGLE_CLOSED);
+        state_ir_out = false;
+      }
     }
-    last_ir_out = ir_out;
-  } 
-  else if(state_payment){
+  }
+
+  if (state_payment) {
     StaticJsonDocument<256> docReply;
     docReply["target"] = "PAYMENT";
     docReply["status"] = "SUCCESS";
-    docReply["session"] = session_id;
+    docReply["method"] = "CASH";
     docReply["invoice"] = invoice_id;
     docReply["cost"] = cost;
     String jsonString;
     serializeJson(docReply, jsonString);
-    client.publish(topic_sensor, jsonString.c_str());
+    
+    xQueueSend(mqttSendQueue, &jsonString, 0);
+    
     state_payment = false;
-    currentMessage = "THANH TOAN THANH CONG";
-    updateOLED();
-  }
-  else if(state_ir_out){
-    while(dem<=10 || ir_in == 0){
-      client.loop(); // Duy trì sóng MQTT
-      delay(100);
-      dem += 1;    
-    }
-    servoOut.write(ANGLE_CLOSED);
-    state_ir_out = false;
-    dem = 0;
+    currentMessage = "THANH TOAN XONG";
+    messageDisplayTime = millis();
   }
 
-  //3. XỬ LÝ SLOT ĐỖ XE
+  if (ir_in != last_ir_in) {
+    delay(50);
+    if (ir_in == 0) { 
+      String msg = "{\"sensor\": \"GATE_IN\", \"status\": \"CO_XE\"}";
+      xQueueSend(mqttSendQueue, &msg, 0);
+      currentMessage = "CO XE VAO"; messageDisplayTime = millis(); 
+    }
+    last_ir_in = ir_in;
+  }
+
+  if (ir_out != last_ir_out) {
+    delay(50);
+    if (ir_out == 0) {
+      String msg = "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}";
+      xQueueSend(mqttSendQueue, &msg, 0);
+      currentMessage = "CO XE RA"; messageDisplayTime = millis();
+    }
+    last_ir_out = ir_out;
+  }
+
   if (ir_slot1 != last_ir_slot1) {
     delay(50);
-    currentMessage = "";
-    if (ir_slot1 == 0){
-      client.publish(topic_sensor, "{\"sensor\": \"SLOT_1\", \"status\": \"CO_XE\"}");
-      messageDisplayTime = millis();
-    }
-    else{
-      client.publish(topic_sensor, "{\"sensor\": \"SLOT_1\", \"status\": \"TRONG\"}");
-    }
+    String msg = (ir_slot1 == 0) ? "{\"sensor\": \"SLOT_1\", \"status\": \"CO_XE\"}" : "{\"sensor\": \"SLOT_1\", \"status\": \"TRONG\"}";
+    xQueueSend(mqttSendQueue, &msg, 0);
     last_ir_slot1 = ir_slot1;
-    updateOLED();
   }
 
   if (ir_slot2 != last_ir_slot2) {
-    currentMessage = "";
-    if (ir_slot2 == 0){
-      client.publish(topic_sensor, "{\"sensor\": \"SLOT_2\", \"status\": \"CO_XE\"}");
-      messageDisplayTime = millis();
-    }
-    else{
-      client.publish(topic_sensor, "{\"sensor\": \"SLOT_2\", \"status\": \"TRONG\"}");
-    }
+    delay(50);
+    String msg = (ir_slot2 == 0) ? "{\"sensor\": \"SLOT_2\", \"status\": \"CO_XE\"}" : "{\"sensor\": \"SLOT_2\", \"status\": \"TRONG\"}";
+    xQueueSend(mqttSendQueue, &msg, 0);
     last_ir_slot2 = ir_slot2;
-    updateOLED();
   }
+
+  updateOLED();
 }
