@@ -128,23 +128,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
     Serial.println(error.c_str());
     return;
   }
-
-  if(String(topic) == topic_control){
-    String target = doc["target"];
-    if(target == "SERVO_IN" && digitalRead(IR_GATE_IN) == 0){
-      servoIn.write(ANGLE_OPEN);
-      state_ir_in = true;
-    } else if(target == "SERVO_OUT" && digitalRead(IR_GATE_OUT) == 0){
-      servoOut.write(ANGLE_OPEN);
-      state_ir_out = true;
-    }
-    else if(target == "PAYMENT"){
-      state_payment = true;
-      method = doc["method"].as<String>();
-      invoice_id = doc["invoice"].as<String>();
-      cost = doc["cost"].as<String>();
-    }
-  }
   xQueueSend(mqttReceiveQueue, &message, 0);
 }
 
