@@ -107,16 +107,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
   
   Serial.println("\n[MQTT] Nhan duoc lenh tu Backend: " + message);
 
-  // Phân tích JSON từ Backend
-  StaticJsonDocument<256> doc;
-  DeserializationError error = deserializeJson(doc, message); 
-  
-  if(error){
-    Serial.print("❌ Lỗi không thể đọc định dạng JSON: ");
-    Serial.println(error.c_str());
-    return;
-  }
-  xQueueSend(mqttReceiveQueue, &message, 0);
+  // Đóng gói vào struct MqttMessage để đẩy vào Queue an toàn
+  MqttMessage msgStruct;
+  strcpy(msgStruct.payload, message.c_str());
+  xQueueSend(mqttReceiveQueue, &msgStruct, 0);
 }
 
 // ================= HÀM KẾT NỐI MẠNG =================
