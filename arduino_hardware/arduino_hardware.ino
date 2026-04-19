@@ -29,7 +29,8 @@ typedef struct {
 // Khai báo đúng kiểu dữ liệu
 QueueHandle_t mqttSendQueue;
 QueueHandle_t mqttReceiveQueue;
-QueueHandle_t mqttHeartQueue; 
+QueueHandle_t mqttHeartQueue;
+QueueHandle_t mqttControlSendQueue;
 
 // ================= CẤU HÌNH PHẦN CỨNG =================
 // 1. Cảm biến hồng ngoại
@@ -185,6 +186,12 @@ void TaskMQTT_Code(void * pvParameters){
       if(xQueueReceive(mqttHeartQueue, &recvHb, 0) == pdTRUE){
         mqttClient.publish(topic_heart, 1, false, recvHb.payload);
       }
+
+      MqttMessage sendCtrlMsg;
+      if(xQueueReceive(mqttControlSendQueue, &sendCtrlMsg, 0) == pdTRUE){
+        mqttClient.publish(topic_control, 1, false, sendCtrlMsg.payload);
+        Serial.println("[MQTT publish CONTROL] " + String(sendCtrlMsg.payload));
+      }
     }
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
@@ -250,6 +257,7 @@ void setup() {
   mqttSendQueue = xQueueCreate(10, sizeof(MqttMessage));
   mqttReceiveQueue = xQueueCreate(10, sizeof(MqttMessage));
   mqttHeartQueue = xQueueCreate(5, sizeof(MqttMessage));
+  mqttControlSendQueue = xQueueCreate(5, sizeof(MqttMessage));
 
   // --- SETUP BẤT ĐỒNG BỘ CHO WIFI & MQTT ---
   mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
@@ -333,8 +341,7 @@ void loop() {
     
     MqttMessage msgStruct;
     serializeJson(docReply, msgStruct.payload);
-    xQueueSend(mqttSendQueue, &msgStruct, 0);
-    
+    xQueueSend(mqttControlSendQueue, &msgStruct, 0);
     state_payment = false;
     currentMessage = "THANH TOAN XONG";
     messageDisplayTime = millis();
