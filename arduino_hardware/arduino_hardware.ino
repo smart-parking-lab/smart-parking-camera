@@ -1,5 +1,5 @@
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <AsyncMqttClient.h>
 #include <ESP32Servo.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
@@ -17,8 +17,9 @@ const char* topic_sensor = "ptithcm_2025/smart_parking/sensors";
 const char* topic_control = "ptithcm_2025/smart_parking/control"; 
 const char* topic_heart = "ptithcm_2025/smart_parking/heartbeat";
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+AsyncMqttClient mqttClient;
+TimerHandle_t mqttReconnectTimer;
+TimerHandle_t wifiReconnectTimer;
 
 // Cấu trúc an toàn để dùng cho TẤT CẢ Queue
 typedef struct {
@@ -114,44 +115,77 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 // ================= HÀM KẾT NỐI MẠNG =================
-void setup_wifi() {
+void connectWifi(){
+  Serial.println("Đang kết nối wifi....");
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println("\n✅ Da ket noi Wi-Fi!");
 }
 
-void reconnect() {
-  while (!client.connected()) {
-    String clientId = "ESP32-Parking-"; clientId += String(random(0xffff), HEX);
-    if (client.connect(clientId.c_str())) {
-      client.subscribe(topic_control); 
-    } else delay(5000);
+void connectToMqtt(){
+  Serial.println("Đang kết nối MQTT...");
+  mqttClient.connect();
+}
+
+void WiFiEvent(WiFiEvent_t event) {
+  switch(event) {
+    case SYSTEM_EVENT_STA_GOT_IP:
+      Serial.println("✅ Đã kết nối Wi-Fi.");
+      connectToMqtt();
+      break;
+    case SYSTEM_EVENT_STA_DISCONNECTED:
+      Serial.println("❌ Mất kết nối Wi-Fi.");
+      xTimerStop(mqttReconnectTimer, 0); // Không cố nối MQTT nếu không có WiFi
+      xTimerStart(wifiReconnectTimer, 0);
+      break;
   }
+}
+
+void onMqttConnect(bool sessionPresent) {
+  Serial.println("✅ Đã kết nối MQTT Broker!");
+  // Subscribe với QoS 1
+  mqttClient.subscribe(topic_control, 1);
+}
+
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason) {
+  Serial.println("❌ Mất kết nối MQTT Broker.");
+  if (WiFi.isConnected()) {
+    xTimerStart(mqttReconnectTimer, 0);
+  }
+}
+
+void onMqttPublish(uint16_t packetId) {
+  Serial.println("[MQTT] Giao hàng QoS 1 thành công! Packet ID: " + String(packetId));
+}
+
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  // LƯU Ý CHÍ THỂ: payload của thư viện này không có ký tự kết thúc '\0'
+  // Phải copy cẩn thận để không bị tràn RAM
+  MqttMessage msgStruct;
+  size_t copyLen = len < 255 ? len : 255;
+  strncpy(msgStruct.payload, payload, copyLen);
+  msgStruct.payload[copyLen] = '\0'; // Chốt chặn an toàn
+
+  Serial.println("\n[MQTT] 📩 Nhận lệnh từ Backend: " + String(msgStruct.payload));
+  xQueueSend(mqttReceiveQueue, &msgStruct, 0);
 }
 
 // ================= TASK: MẠNG (CORE 0) =================
 void TaskMQTT_Code(void * pvParameters){
-  setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
-  client.setCallback(callback);
-
   for(;;){
-    if(!client.connected()) reconnect();
-    client.loop();
-    
-    // Nhận dữ liệu Cảm biến từ Queue và Gửi đi
-    MqttMessage sendMsg;
-    if(xQueueReceive(mqttSendQueue, &sendMsg, 0) == pdTRUE){
-      client.publish(topic_sensor, sendMsg.payload);
-      Serial.println("[MQTT publish] " + String(sendMsg.payload));
-    }
+    if(mqttClient.connected()){
+      // Nhận dữ liệu Cảm biến từ Queue và Gửi đi với QoS 1
+      MqttMessage sendMsg;
+      if(xQueueReceive(mqttSendQueue, &sendMsg, 0) == pdTRUE){
+        // Tham số 1 ở đây chính là QoS = 1
+        mqttClient.publish(topic_sensor, 1, false, sendMsg.payload);
+        Serial.println("[MQTT publish] " + String(sendMsg.payload));
+      }
 
-    // Nhận dữ liệu Nhịp tim từ Queue và Gửi đi
-    MqttMessage recvHb;
-    if(xQueueReceive(mqttHeartQueue, &recvHb, 0) == pdTRUE){
-      client.publish(topic_heart, recvHb.payload);
+      // Nhận dữ liệu Nhịp tim từ Queue và Gửi đi với QoS 1
+      MqttMessage recvHb;
+      if(xQueueReceive(mqttHeartQueue, &recvHb, 0) == pdTRUE){
+        mqttClient.publish(topic_heart, 1, false, recvHb.payload);
+      }
     }
-    
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
@@ -161,22 +195,18 @@ void TaskMQTT_Code(void * pvParameters){
 // và giao diện hiển thị (OLED)
 void TaskHeartBeat_Code(void * pvParameters){
   for(;;){
-    // --- 1. KIỂM TRA ESP32 (Sức khỏe phần mềm) ---
+    // --- 1. KIỂM TRA ESP32 ---
     StaticJsonDocument<128> espDoc;
     espDoc["target"] = "ESP32";
     espDoc["status"] = "ONLINE";
-    espDoc["uptime_s"] = millis() / 1000; // Thời gian đã chạy
-
-    espDoc["free_ram"] = ESP.getFreeHeap(); // Trả về số byte RAM còn trống
-    espDoc["wifi_rssi"] = WiFi.RSSI();      // Cường độ sóng Wi-Fi (-30 đến -90 dBm)
-    espDoc["cpu_freq"] = ESP.getCpuFreqMHz();
+    espDoc["uptime_s"] = millis() / 1000;
 
     MqttMessage espMsg;
     serializeJson(espDoc, espMsg.payload);
     xQueueSend(mqttHeartQueue, &espMsg, 0);
 
-    // --- 2. KIỂM TRA OLED (Sức khỏe phần cứng I2C) ---
-    Wire.beginTransmission(0x3C); // "Gõ cửa" địa chỉ OLED
+    // --- 2. KIỂM TRA OLED ---
+    Wire.beginTransmission(0x3C);
     byte error = Wire.endTransmission();
 
     StaticJsonDocument<128> oledDoc;
@@ -187,10 +217,9 @@ void TaskHeartBeat_Code(void * pvParameters){
     serializeJson(oledDoc, oledMsg.payload);
     xQueueSend(mqttHeartQueue, &oledMsg, 0);
 
-    Serial.println("[SYSTEM] Đã kiểm tra nhịp tim: ESP32 & OLED");
+    Serial.println("[SYSTEM] Đã gửi báo cáo Nhịp tim (Heartbeat)");
 
-    // Ngủ sâu 30 giây để không chiếm dụng CPU của các cảm biến trong loop()
-    vTaskDelay(20000 / portTICK_PERIOD_MS);
+    vTaskDelay(30000 / portTICK_PERIOD_MS);
   }
 }
 
@@ -217,15 +246,29 @@ void setup() {
   display.setCursor(10, 20); display.println("Khoi dong he thong...");
   display.display();
 
-  // Đổi size của Queue thành struct MqttMessage
+  // Khởi tạo các Queue
   mqttSendQueue = xQueueCreate(10, sizeof(MqttMessage));
   mqttReceiveQueue = xQueueCreate(10, sizeof(MqttMessage));
   mqttHeartQueue = xQueueCreate(5, sizeof(MqttMessage));
 
+  // --- SETUP BẤT ĐỒNG BỘ CHO WIFI & MQTT ---
+  mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
+  wifiReconnectTimer = xTimerCreate("wifiTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToWifi));
+
+  WiFi.onEvent(WiFiEvent);
+  
+  mqttClient.onConnect(onMqttConnect);
+  mqttClient.onDisconnect(onMqttDisconnect);
+  mqttClient.onPublish(onMqttPublish);
+  mqttClient.onMessage(onMqttMessage);
+  mqttClient.setWill(topic_heart, 1, false, "{\"target\": \"ESP32\", \"status\": \"OFFLINE\"}");
+  mqttClient.setServer(mqtt_server, mqtt_port);
+  connectToWifi(); // Kích hoạt kết nối mạng
+
   // Gán TaskMQTT vào Core 0
   xTaskCreatePinnedToCore(TaskMQTT_Code, "TaskMQTT", 10000, NULL, 1, NULL, 0);
   
-  // Gán TaskHeartBeat vào Core 1 (Cùng nhân với loop)
+  // Gán TaskHeartBeat vào Core 1
   xTaskCreatePinnedToCore(TaskHeartBeat_Code, "TaskHeartBeat", 5000, NULL, 1, NULL, 1); 
 }
 
@@ -240,7 +283,6 @@ void loop() {
   MqttMessage recvMsg;
   if(xQueueReceive(mqttReceiveQueue, &recvMsg, 0) == pdTRUE){
     StaticJsonDocument<256> doc;
-    // Chuyển payload từ mảng char sang String để thư viện JSON dễ đọc
     String jsonStr = String(recvMsg.payload); 
     DeserializationError error = deserializeJson(doc, jsonStr);
 
@@ -265,7 +307,7 @@ void loop() {
     }
   }
 
-  // 2. XỬ LÝ ĐÓNG CỔNG (Đã sửa lỗi cú pháp ngoặc đơn)
+  // 2. XỬ LÝ ĐÓNG CỔNG TỰ ĐỘNG
   if (state_ir_in) {
     if ( ((millis() - gateInOpenTime) > 5000) && (ir_in != 0) ) {
       servoIn.write(ANGLE_CLOSED);
