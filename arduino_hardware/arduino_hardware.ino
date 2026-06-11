@@ -7,8 +7,8 @@
 #include <ArduinoJson.h>
 
 // ================= CẤU HÌNH MẠNG & MQTT =================
-const char* ssid = "Lam";
-const char* password = "23282904";
+const char* ssid = "-.-";
+const char* password = "0387269547";
 const char* mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 
@@ -71,19 +71,50 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 String currentMessage = "";
 unsigned long messageDisplayTime = 0;
 
+String errorMessage = "";
+bool hasErrorMessage = false;
+unsigned long errorDisplayTime = 0;
+
 // ================= HÀM CẬP NHẬT MÀN HÌNH OLED =================
 void updateOLED() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  if (currentMessage != "" && (millis() - messageDisplayTime > 3000)) {
-    currentMessage = "";
+  // Ưu tiên hiển thị lỗi
+  if (hasErrorMessage) {
+
+    if (millis() - errorDisplayTime > 5000) {
+      hasErrorMessage = false;
+      errorMessage = "";
+    }
+    else {
+      display.setCursor(0, 0);
+      display.println("=== ERROR ===");
+      display.drawLine(0, 12, 128, 12, SSD1306_WHITE);
+
+      display.setCursor(0, 25);
+      display.println(errorMessage);
+
+      display.display();
+      return;
+    }
+  }
+
+  // Nếu đang có thông báo và chưa quá 3 giây
+  if (currentMessage != "" &&
+      (millis() - messageDisplayTime <= 3000)) {
+
+    display.setCursor(10, 25);
+    display.println(currentMessage);
   }
   else {
+
     currentMessage = "";
+
     bool s1_occupied = (digitalRead(IR_SLOT_1) == 0);
     bool s2_occupied = (digitalRead(IR_SLOT_2) == 0);
+
     int slots_available = 0;
     if (!s1_occupied) slots_available++;
     if (!s2_occupied) slots_available++;
@@ -92,13 +123,26 @@ void updateOLED() {
     display.println("SMART PARKING PTIT");
     display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
 
-    display.setCursor(0, 20); display.print("Slot 1: "); display.println(s1_occupied ? "CO XE" : "TRONG");
-    display.setCursor(0, 35); display.print("Slot 2: "); display.println(s2_occupied ? "CO XE" : "TRONG");
+    display.setCursor(0, 20);
+    display.print("Slot 1: ");
+    display.println(s1_occupied ? "CO XE" : "TRONG");
 
-    display.setCursor(0, 50); display.print("Trang thai: ");
-    if (slots_available == 0) display.println("DA DAY!");
-    else { display.print("CON "); display.print(slots_available); display.println(" CHO"); }
+    display.setCursor(0, 35);
+    display.print("Slot 2: ");
+    display.println(s2_occupied ? "CO XE" : "TRONG");
+
+    display.setCursor(0, 50);
+    display.print("Trang thai: ");
+
+    if (slots_available == 0)
+      display.println("DA DAY!");
+    else {
+      display.print("CON ");
+      display.print(slots_available);
+      display.println(" CHO");
+    }
   }
+
   display.display();
 }
 
@@ -128,11 +172,11 @@ void connectToMqtt(){
 
 void WiFiEvent(WiFiEvent_t event) {
   switch(event) {
-    case SYSTEM_EVENT_STA_GOT_IP:
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       Serial.println("✅ Đã kết nối Wi-Fi.");
       connectToMqtt();
       break;
-    case SYSTEM_EVENT_STA_DISCONNECTED:
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
       Serial.println("❌ Mất kết nối Wi-Fi.");
       xTimerStop(mqttReconnectTimer, 0); // Không cố nối MQTT nếu không có WiFi
       xTimerStart(wifiReconnectTimer, 0);
@@ -261,7 +305,7 @@ void setup() {
 
   // --- SETUP BẤT ĐỒNG BỘ CHO WIFI & MQTT ---
   mqttReconnectTimer = xTimerCreate("mqttTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToMqtt));
-  wifiReconnectTimer = xTimerCreate("wifiTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectToWifi));
+  wifiReconnectTimer = xTimerCreate("wifiTimer", pdMS_TO_TICKS(2000), pdFALSE, (void*)0, reinterpret_cast<TimerCallbackFunction_t>(connectWifi));
 
   WiFi.onEvent(WiFiEvent);
   
@@ -271,7 +315,7 @@ void setup() {
   mqttClient.onMessage(onMqttMessage);
   mqttClient.setWill(topic_heart, 1, false, "{\"target\": \"ESP32\", \"status\": \"OFFLINE\"}");
   mqttClient.setServer(mqtt_server, mqtt_port);
-  connectToWifi(); // Kích hoạt kết nối mạng
+  connectWifi(); // Kích hoạt kết nối mạng
 
   // Gán TaskMQTT vào Core 0
   xTaskCreatePinnedToCore(TaskMQTT_Code, "TaskMQTT", 10000, NULL, 1, NULL, 0);
@@ -296,7 +340,7 @@ void loop() {
 
     if(!error){
       String target = doc["target"];
-      if(target == "SERVO_IN" && ir_in == 0){
+      if(target == "SERVO_IN"){
         servoIn.write(ANGLE_OPEN);
         state_ir_in = true;
         gateInOpenTime = millis();
@@ -306,11 +350,21 @@ void loop() {
         state_ir_out = true;
         gateOutOpenTime = millis();
       }
-      else if(target == "PAYMENT"){
-        state_payment = true;
-        method = doc["method"].as<String>();
-        invoice_id = doc["invoice"].as<String>();
-        cost = doc["cost"].as<String>();
+      else if(target == "PAYMENT") {
+        String status = doc["status"] | "";
+          if(status == "START") {
+            state_payment = true;
+            method = doc["method"].as<String>();
+            invoice_id = doc["invoice"].as<String>();
+            cost = doc["cost"].as<String>();
+            Serial.println("[PAYMENT] Bat dau xu ly thanh toan");
+          }
+      }
+      else if(target == "ERR") {
+        errorMessage = doc["content"].as<String>();
+        hasErrorMessage = true;
+        errorDisplayTime = millis();
+        Serial.println("[ERROR] " + errorMessage);
       }
     }
   }
@@ -349,22 +403,36 @@ void loop() {
 
   if (ir_in != last_ir_in) {
     delay(50);
-    if (ir_in == 0) { 
-      MqttMessage msgStruct;
-      strcpy(msgStruct.payload, "{\"sensor\": \"GATE_IN\", \"status\": \"CO_XE\"}");
-      xQueueSend(mqttSendQueue, &msgStruct, 0);
-      currentMessage = "CO XE VAO"; messageDisplayTime = millis(); 
+
+    ir_in = digitalRead(IR_GATE_IN);
+
+    if (ir_in != last_ir_in) {
+
+        if (ir_in == 0) {
+          MqttMessage msgStruct;
+          strcpy(msgStruct.payload, "{\"sensor\": \"GATE_IN\", \"status\": \"CO_XE\"}");
+          xQueueSend(mqttSendQueue, &msgStruct, 0);
+
+          currentMessage = "CO XE VAO";
+          messageDisplayTime = millis();
+        }
+
+        last_ir_in = ir_in;
     }
-    last_ir_in = ir_in;
   }
 
   if (ir_out != last_ir_out) {
     delay(50);
-    if (ir_out == 0) {
-      MqttMessage msgStruct;
-      strcpy(msgStruct.payload, "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}");
-      xQueueSend(mqttSendQueue, &msgStruct, 0);
-      currentMessage = "CO XE RA"; messageDisplayTime = millis();
+    ir_out = digitalRead(IR_GATE_OUT);
+    if (ir_out != last_ir_out) {
+      if (ir_out == 0) {
+        MqttMessage msgStruct;
+        strcpy(msgStruct.payload, "{\"sensor\": \"GATE_OUT\", \"status\": \"CO_XE\"}");
+        xQueueSend(mqttSendQueue, &msgStruct, 0);
+
+        currentMessage = "CO XE RA";
+        messageDisplayTime = millis();
+      }
     }
     last_ir_out = ir_out;
   }
