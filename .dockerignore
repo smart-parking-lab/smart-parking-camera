@@ -1,0 +1,5 @@
+.git
+.gitignore
+arduino_hardware/
+image.png
+*.md
