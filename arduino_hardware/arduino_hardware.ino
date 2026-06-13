@@ -340,17 +340,19 @@ void loop() {
 
     if(!error){
       String target = doc["target"];
-      if(target == "SERVO_IN"){
+      String command = doc["command"];
+      String status = doc["status"];
+      if(target == "SERVO_IN" && command == "OPEN"){
         servoIn.write(ANGLE_OPEN);
         state_ir_in = true;
         gateInOpenTime = millis();
       } 
-      else if(target == "SERVO_OUT" && ir_out == 0){
+      else if(target == "SERVO_OUT" && command == "OPEN"){
         servoOut.write(ANGLE_OPEN);
         state_ir_out = true;
         gateOutOpenTime = millis();
       }
-      else if(target == "PAYMENT") {
+      else if(target == "PAYMENT" && status == "START") {
         String status = doc["status"] | "";
           if(status == "START") {
             state_payment = true;
