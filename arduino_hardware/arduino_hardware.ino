@@ -58,8 +58,8 @@ String invoice_id = "";
 String cost = "";
 
 // 2. Servo
-#define SERVO_IN_PIN  13
-#define SERVO_OUT_PIN 14
+#define SERVO_IN_PIN  25
+#define SERVO_OUT_PIN 26
 Servo servoIn;
 Servo servoOut;
 const int ANGLE_CLOSED = 0;   
@@ -93,10 +93,6 @@ void updateOLED() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
 
-  // ==================================
-  // ƯU TIÊN LỖI
-  // ==================================
-
   if (hasErrorMessage) {
     if (millis() - errorDisplayTime > 5000) {
       hasErrorMessage = false;
@@ -105,20 +101,13 @@ void updateOLED() {
     else {
       display.setCursor(0, 0);
       display.println("=== ERROR ===");
-
       display.drawLine(0, 12, 128, 12, SSD1306_WHITE);
-
       display.setCursor(0, 25);
       display.println(errorMessage);
-
       display.display();
       return;
     }
   }
-
-  // ==================================
-  // THÔNG BÁO HÀNG ĐỢI
-  // ==================================
 
   if (isDisplayingMessage) {
     if (millis() - messageDisplayTime < 3000) {
@@ -127,36 +116,24 @@ void updateOLED() {
       display.display();
       return;
     }
-
     isDisplayingMessage = false;
     currentMessage = "";
   }
 
-  // ==================================
-  // MÀN HÌNH MẶC ĐỊNH
-  // ==================================
-
   bool s1_occupied = (last_ir_slot1 == LOW);
   bool s2_occupied = (last_ir_slot2 == LOW);
-
   int slots_available = 0;
-
   if (!s1_occupied) slots_available++;
   if (!s2_occupied) slots_available++;
-
   display.setCursor(15, 0);
   display.println("SMART PARKING PTIT");
-
   display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
-
   display.setCursor(0, 20);
   display.print("Slot 1: ");
   display.println(s1_occupied ? "CO XE" : "TRONG");
-
   display.setCursor(0, 35);
   display.print("Slot 2: ");
   display.println(s2_occupied ? "CO XE" : "TRONG");
-
   display.setCursor(0, 50);
   display.print("Trang thai: ");
 
@@ -168,23 +145,17 @@ void updateOLED() {
     display.print(slots_available);
     display.println(" CHO");
   }
-
   display.display();
 }
 
-bool hasAvailableSlot()
-{
-  return (
-      last_ir_slot1 == HIGH ||
-      last_ir_slot2 == HIGH
-  );
+bool hasAvailableSlot(){
+  return (last_ir_slot1 == HIGH || last_ir_slot2 == HIGH);
 }
 
-void shortBeep()
-{
-    pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, LOW); // Mức LOW để bật còi (Low level trigger)
-    beepEndTime = millis() + 100;
+void shortBeep(){
+  
+  digitalWrite(BUZZER_PIN, LOW); // Mức LOW để bật còi (Low level trigger)
+  beepEndTime = millis() + 100;
 }
 
 // ================= HÀM KẾT NỐI MẠNG =================
@@ -215,7 +186,6 @@ void WiFiEvent(WiFiEvent_t event) {
 
 void onMqttConnect(bool sessionPresent) {
   Serial.println("✅ Đã kết nối MQTT Broker!");
-  // Subscribe với QoS 1
   mqttClient.subscribe(topic_control, 1);
 }
 
@@ -235,30 +205,30 @@ void publishMQTT(const char* topic, const String& payload){
   xQueueSend(mqttTxQueue, &msg, 0);
 }
 
-void onMqttMessage( char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) 
-{
-    MqttMessage msg;
-    // Copy topic
-    strncpy(msg.topic, topic, sizeof(msg.topic) - 1);
-    msg.topic[sizeof(msg.topic) - 1] = '\0';
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
+  // LƯU Ý CHÍ THỂ: payload của thư viện này không có ký tự kết thúc '\0'
+  // Phải copy cẩn thận để không bị tràn RAM
+  MqttMessage msgStruct;
+  size_t copyLen = len < 255 ? len : 255;
+  strncpy(msgStruct.payload, payload, copyLen);
+  msgStruct.payload[copyLen] = '\0'; // Chốt chặn an toàn
 
-    // Copy payload an toàn
-    size_t copyLen = (len < sizeof(msg.payload) - 1) ? len : sizeof(msg.payload) - 1;
-    memcpy(msg.payload, payload, copyLen);
-    msg.payload[copyLen] = '\0';
-
-    xQueueSend(mqttRxQueue, &msg, 0);
+  Serial.println("\n[MQTT] 📩 Nhận lệnh từ Backend: " + String(msgStruct.payload));
+  xQueueSend(mqttRxQueue, &msgStruct, 0);
 }
 
 // ================= TASK: MẠNG (CORE 0) =================
 void TaskMQTT_Code(void * pvParameters){
   MqttMessage msg;
-  for(;;){
-    if(mqttClient.connected()){
-      if(xQueueReceive(mqttTxQueue, &msg, portMAX_DELAY) == pdTRUE){
-          mqttClient.publish(msg.topic, 1, false, msg.payload);
-          Serial.printf("[MQTT] %s -> %s\n", msg.topic, msg.payload);
-      }
+  while(1){
+    if(!mqttClient.connected()){
+      vTaskDelay(1000 / portTICK_PERIOD_MS);
+      continue;
+    }
+
+    if(xQueueReceive(mqttTxQueue, &msg, portMAX_DELAY) == pdTRUE){
+      mqttClient.publish(msg.topic, 1, false, msg.payload);
+      Serial.printf("[MQTT] %s -> %s\n", msg.topic, msg.payload);
     }
   }
 }
@@ -302,7 +272,7 @@ void setup() {
   pinMode(IR_GATE_OUT, INPUT_PULLUP);
   pinMode(IR_SLOT_1, INPUT_PULLUP);
   pinMode(IR_SLOT_2, INPUT_PULLUP);
-  pinMode(BUZZER_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, HIGH);
 
   servoIn.attach(SERVO_IN_PIN);
@@ -314,6 +284,7 @@ void setup() {
     Serial.println(F("Khong tim thay man hinh OLED"));
     for(;;);
   }
+  
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(10, 20); display.println("Khoi dong he thong...");
@@ -362,12 +333,8 @@ void loop() {
       String command = doc["command"];
       String status = doc["status"];
       if(target == "SERVO_IN" && command == "OPEN"){
-        if(!hasAvailableSlot())
-        {
-            pushOLEDMessage("BAI XE DAY");
-        }
-        else
-        {
+        if(!hasAvailableSlot()) pushOLEDMessage("BAI XE DAY");
+        else{
           servoIn.write(ANGLE_OPEN);
           state_ir_in = true;
           gateInOpenTime = millis();
@@ -431,12 +398,10 @@ void loop() {
   if (ir_in != last_ir_in)
   {
     if(debounce[0] == 0) debounce[0] = millis();
-    if(millis() > (debounce[0]+50)){
+    if(millis() > (debounce[0]+300)){
         ir_in = digitalRead(IR_GATE_IN);
-        if (ir_in != last_ir_in)
-        {
-            if (ir_in == LOW)
-            {
+        if (ir_in != last_ir_in){
+            if (ir_in == LOW){
                 publishMQTT(topic_sensor, "{\"sensor\":\"GATE_IN\",\"status\":\"CO_XE\"}");
                 shortBeep();
             }
@@ -449,12 +414,10 @@ void loop() {
   if (ir_out != last_ir_out)
   {
     if(debounce[1] == 0) debounce[1] = millis();
-    if(millis() > (debounce[1]+50)){
+    if(millis() > (debounce[1]+300)){
       ir_out = digitalRead(IR_GATE_OUT);
-      if (ir_out != last_ir_out)
-      {
-        if (ir_out == LOW)
-        {
+      if (ir_out != last_ir_out){
+        if (ir_out == LOW){
             publishMQTT(topic_sensor, "{\"sensor\":\"GATE_OUT\",\"status\":\"CO_XE\"}");
             shortBeep();
         }
@@ -464,19 +427,15 @@ void loop() {
     }
   }
 
-  if (ir_slot1 != last_ir_slot1)
-  {
+  if (ir_slot1 != last_ir_slot1){
     if(debounce[2] == 0) debounce[2] = millis();
-    if(millis() > (debounce[2]+50)){
+    if(millis() > (debounce[2]+300)){
       ir_slot1 = digitalRead(IR_SLOT_1);
-      if (ir_slot1 != last_ir_slot1)
-      {
-        if (ir_slot1 == LOW)
-        {
+      if (ir_slot1 != last_ir_slot1){
+        if (ir_slot1 == LOW){
             publishMQTT(topic_sensor, "{\"sensor\":\"SLOT_1\",\"status\":\"CO_XE\"}");
         }
-        else
-        {
+        else{
             publishMQTT(topic_sensor, "{\"sensor\":\"SLOT_1\",\"status\":\"TRONG\"}");
         }
         last_ir_slot1 = ir_slot1;
@@ -485,19 +444,15 @@ void loop() {
     }
   }
 
-  if (ir_slot2 != last_ir_slot2)
-  {
+  if (ir_slot2 != last_ir_slot2){
     if(debounce[3] == 0) debounce[3] = millis();
-    if(millis() > (debounce[3]+50)){
+    if(millis() > (debounce[3]+300)){
       ir_slot2 = digitalRead(IR_SLOT_2);
-      if (ir_slot2 != last_ir_slot2)
-      {
-        if (ir_slot2 == LOW)
-        {
+      if (ir_slot2 != last_ir_slot2){
+        if (ir_slot2 == LOW){
             publishMQTT(topic_sensor, "{\"sensor\":\"SLOT_2\",\"status\":\"CO_XE\"}");
         }
-        else
-        {
+        else{
             publishMQTT(topic_sensor, "{\"sensor\":\"SLOT_2\",\"status\":\"TRONG\"}");
         }
         last_ir_slot2 = ir_slot2;
@@ -506,9 +461,8 @@ void loop() {
     }
   }
 
-  if(beepEndTime > 0 && millis() >= beepEndTime)
-  {
-    pinMode(BUZZER_PIN, INPUT); // Tắt còi
+  if(beepEndTime > 0 && millis() >= beepEndTime){
+    digitalWrite(BUZZER_PIN, HIGH); // Tắt còi
     beepEndTime = 0;
   }
 
