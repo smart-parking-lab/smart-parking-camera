@@ -383,13 +383,18 @@ void loop() {
     docReply["status"] = "SUCCESS";
     docReply["method"] = "CAST";
     docReply["invoice"] = invoice_id;
-    docReply["cost"] = "3000đ";
+    docReply["cost"] = cost;
     
     MqttMessage msgStruct;
     serializeJson(docReply, msgStruct.payload);
     publishMQTT(topic_control, msgStruct.payload);
     state_payment = false;
-    pushOLEDMessage("3,000 VNĐ\nTHANH TOAN XONG");
+    long costValue = cost.toInt();
+    if (costValue < 1000){
+      costValue *= 1000;
+    }
+    cost = String(costValue);
+    pushOLEDMessage(cost + " VNĐ\nTHANH TOAN XONG");
   }
 
   if (ir_in != last_ir_in)
