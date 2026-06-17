@@ -347,13 +347,10 @@ void loop() {
       }
       else if(target == "PAYMENT" && status == "START") {
         String status = doc["status"] | "";
-          if(status == "START") {
-            state_payment = true;
-            method = doc["method"].as<String>();
-            invoice_id = doc["invoice"].as<String>();
-            cost = doc["cost"].as<String>();
-            Serial.println("[PAYMENT] Bat dau xu ly thanh toan");
-          }
+        state_payment = true;
+        method = doc["method"].as<String>();
+        invoice_id = doc["invoice"].as<String>();
+        cost = doc["cost"].as<String>();
       }
       else if(target == "ERR") {
         errorMessage = doc["content"].as<String>();
@@ -384,30 +381,30 @@ void loop() {
     StaticJsonDocument<256> docReply;
     docReply["target"] = "PAYMENT";
     docReply["status"] = "SUCCESS";
-    docReply["method"] = method;
+    docReply["method"] = "CAST";
     docReply["invoice"] = invoice_id;
-    docReply["cost"] = cost;
+    docReply["cost"] = "3000đ";
     
     MqttMessage msgStruct;
     serializeJson(docReply, msgStruct.payload);
     publishMQTT(topic_control, msgStruct.payload);
     state_payment = false;
-    pushOLEDMessage("THANH TOAN XONG");
+    pushOLEDMessage("3,000 VNĐ\nTHANH TOAN XONG");
   }
 
   if (ir_in != last_ir_in)
   {
     if(debounce[0] == 0) debounce[0] = millis();
     if(millis() > (debounce[0]+300)){
-        ir_in = digitalRead(IR_GATE_IN);
-        if (ir_in != last_ir_in){
-            if (ir_in == LOW){
-                publishMQTT(topic_sensor, "{\"sensor\":\"GATE_IN\",\"status\":\"CO_XE\"}");
-                shortBeep();
-            }
-            last_ir_in = ir_in;
+      ir_in = digitalRead(IR_GATE_IN);
+      if (ir_in != last_ir_in){
+        if (ir_in == LOW){
+            publishMQTT(topic_sensor, "{\"sensor\":\"GATE_IN\",\"status\":\"CO_XE\"}");
+            shortBeep();
         }
-        debounce[0] = 0;
+        last_ir_in = ir_in;
+      }
+      debounce[0] = 0;
     }
   }
 
